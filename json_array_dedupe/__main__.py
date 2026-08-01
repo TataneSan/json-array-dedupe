@@ -1,5 +1,4 @@
-"""Module entry point for ``python -m json_array_dedupe``."""
-
+"""Entry point for python -m json_array_dedupe."""
 import sys
 
 from .cli import main

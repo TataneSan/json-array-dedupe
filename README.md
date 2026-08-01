@@ -1,19 +1,20 @@
 # json-array-dedupe
 
-Remove duplicate elements from JSON arrays — stable order, canonical comparison, optional key-based dedupe. Works on whole documents or JSON Lines streams.
+Remove duplicate elements from arrays inside JSON or JSONL documents.
+Deduplication is structural (key order in objects is normalized) and stable:
+the first occurrence of each element is kept, later duplicates are dropped.
 
 ## Features
 
-- Stable: keeps first occurrence by default (`--keep-last` to invert)
-- Deep comparison via canonical serialization (key order inside objects ignored)
-- `--key PATH` to dedupe by an extracted field (`id`, `user.name`, `0.id`)
-- JSON Lines mode: one array per line, deduped independently
-- `--check` CI mode: exit 2 when duplicates exist, writes nothing
-- `--json` stats report (elements / removed / kept)
-- `--indent N` pretty-print
-- Zero dependencies, pure Python 3.9+
+- Recursive: deduplicates arrays at any depth, including inside objects
+- Structural comparison — `{"x":1,"y":2}` duplicates `{"y":2,"x":1}`
+- Stable ordering: first occurrence wins, relative order preserved
+- Type-aware: `1` (number) and `"1"` (string) are considered distinct
+- `--check` CI mode: exits 2 when any duplicate element is found, no rewrite
+- `--json` machine-readable report on stderr
+- Pure Python standard library, no dependencies; output as JSON Lines
 
-## Install
+## Installation
 
 ```bash
 pip install .
@@ -23,85 +24,34 @@ pip install git+https://github.com/TataneSan/json-array-dedupe.git
 
 ## Usage
 
-```
-json-array-dedupe [OPTIONS] [FILE]
-```
-
-Reads stdin when FILE is omitted or `-`.
-
-### Basic dedupe
-
 ```bash
-echo '[1, 2, 2, 3, 1, "a", "a"]' | json-array-dedupe
-# [1,2,3,"a"]
+echo '{"tags": ["a", "b", "a", "c"]}' | json-array-dedupe -
+# {"tags": ["a", "b", "c"]}
+
+# JSONL stream
+json-array-dedupe events.jsonl > events.deduped.jsonl
+
+# CI check
+json-array-dedupe --check config.json || echo "duplicates found"
+
+# JSON report
+json-array-dedupe --json data.jsonl
 ```
 
-### Dedupe objects by a key
-
-```bash
-cat users.json | json-array-dedupe --key id
-```
-
-For input `[{"id":1,"v":"a"},{"id":2,"v":"b"},{"id":1,"v":"c"}]` this keeps the first two elements — the full objects are kept, only the key drives the comparison.
-
-Nested paths work: `--key user.name`, and numeric segments index arrays (`--key 0.id`).
-
-### Keep the last occurrence
-
-```bash
-echo '[{"id":1,"v":"old"},{"id":1,"v":"new"}]' | json-array-dedupe --key id --keep-last
-# [{"id":1,"v":"new"}]
-```
-
-### JSON Lines mode
-
-```bash
-json-array-dedupe --jsonl lines.txt
-```
-
-Each non-empty line must be a JSON array; each is deduped independently.
-
-### CI check
-
-```bash
-json-array-dedupe --check data.json; echo "exit=$?"
-# exit=2 when duplicates are present, 0 when already unique
-```
-
-### Stats report
-
-```bash
-json-array-dedupe --json --check data.json
-```
+Example JSON report (stderr):
 
 ```json
 {
-  "file": "data.json",
-  "elements": 10,
-  "removed": 3,
-  "kept": 7
+  "documents": 3,
+  "duplicates_removed": 5
 }
 ```
 
-## Options
-
-| Option | Description |
-|---|---|
-| `FILE` | JSON file; stdin when omitted or `-` |
-| `--key PATH` | dedupe objects by extracted key (dot path, numeric segments index arrays) |
-| `--keep-last` | keep the last occurrence instead of the first |
-| `--jsonl` | input is JSON Lines (one array per line) |
-| `--check` | check-only: exit 2 if duplicates found, writes nothing |
-| `--indent N` | pretty-print with N spaces |
-| `--json` | emit a stats report instead of the array |
-
 ## Exit codes
 
-| Code | Meaning |
-|---|---|
-| 0 | success (`--check`: no duplicates) |
-| 1 | CLI, parse or I/O error |
-| 2 | `--check` found duplicates |
+- `0` — success (in `--check` mode: no duplicates found)
+- `1` — I/O, CLI or JSON parse error
+- `2` — `--check` mode: at least one duplicate array element exists
 
 ## Tests
 

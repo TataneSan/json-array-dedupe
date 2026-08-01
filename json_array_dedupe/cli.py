@@ -1,173 +1,123 @@
-#!/usr/bin/env python3
-"""json-array-dedupe - stable deduplication of JSON array elements.
+"""json-array-dedupe: remove duplicate elements from arrays in JSON/JSONL.
 
-Reads a JSON array (whole document) or JSON Lines (one array per line) and
-removes duplicated elements while preserving the first occurrence. Elements
-are compared by canonical serialization, or by an extracted key.
+Every array encountered in the input documents is deduplicated by canonical
+JSON serialization (key order normalized), preserving the first occurrence
+position. Nested arrays/objects inside elements are compared structurally.
+
+Reads stdin when FILE is omitted or "-", writes the transformed documents to
+stdout as JSON Lines (one document per line).
 
 Exit codes:
-    0 - success (with --check: no duplicates found)
-    1 - CLI, parse or I/O error
-    2 - --check found duplicates that would be removed
+    0: success
+    1: I/O, CLI or JSON parse error
+    2: --check mode and at least one duplicate element was found
 """
-
 import argparse
 import json
 import sys
 
 
-def canonical(value):
-    """Canonical, hashable representation of any JSON value."""
-    return json.dumps(value, sort_keys=True, separators=(",", ":"),
+def canon(item):
+    return json.dumps(item, sort_keys=True, separators=(",", ":"),
                       ensure_ascii=False)
 
 
-def extract_key(element, path):
-    """Extract a comparison key from an element following a dot path.
+def dedupe_array(arr, stats):
+    seen = set()
+    out = []
+    for item in arr:
+        key = canon(item)
+        if key in seen:
+            stats["removed"] += 1
+            continue
+        seen.add(key)
+        out.append(item)
+    return out
 
-    Numeric segments index into arrays. A missing segment raises KeyError.
-    """
-    node = element
-    for part in path.split("."):
-        if isinstance(node, dict):
-            node = node[part]
-        elif isinstance(node, list):
-            node = node[int(part)]
-        else:
-            raise KeyError(part)
+
+def walk(node, stats):
+    if isinstance(node, list):
+        node = dedupe_array(node, stats)
+        for i, item in enumerate(node):
+            node[i] = walk(item, stats)
+        return node
+    if isinstance(node, dict):
+        for k, v in node.items():
+            node[k] = walk(v, stats)
+        return node
     return node
 
 
-def dedupe(array, key_path=None, keep_last=False):
-    """Return (unique_list, removed_count). Stable: first (or last) kept."""
-    seen = {}
-    for index, element in enumerate(array):
+def read_docs(text):
+    text = text.strip()
+    if not text:
+        return []
+    try:
+        return [json.loads(text)]
+    except json.JSONDecodeError:
+        pass
+    docs = []
+    for lineno, line in enumerate(text.splitlines(), 1):
+        line = line.strip()
+        if not line:
+            continue
         try:
-            basis = extract_key(element, key_path) if key_path else element
-        except (KeyError, IndexError, TypeError, ValueError):
-            raise ValueError("key path %r not found in element %d"
-                             % (key_path, index))
-        fingerprint = canonical(basis)
-        if keep_last or fingerprint not in seen:
-            seen[fingerprint] = element
-    unique = list(seen.values())
-    return unique, len(array) - len(unique)
-
-
-def read_input(path):
-    if path in (None, "-"):
-        return sys.stdin.read()
-    with open(path, "r", encoding="utf-8") as fh:
-        return fh.read()
-
-
-def emit(value, indent=None):
-    if indent is None:
-        json.dump(value, sys.stdout, separators=(",", ":"),
-                  ensure_ascii=False)
-    else:
-        json.dump(value, sys.stdout, indent=indent, ensure_ascii=False)
-    sys.stdout.write("\n")
-
-
-def process_document(text, key_path, keep_last):
-    """Dedupe a JSON array. Returns (output, original_len, removed)."""
-    data = json.loads(text)
-    if not isinstance(data, list):
-        raise ValueError("top-level value must be a JSON array")
-    output, removed = dedupe(data, key_path, keep_last)
-    return output, len(data), removed
+            docs.append(json.loads(line))
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"line {lineno}: invalid JSON: {exc}")
+    return docs
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(
         prog="json-array-dedupe",
-        description="Remove duplicate elements from JSON arrays "
-                    "(stable order, optional key-based comparison).",
+        description="Remove duplicate elements from arrays in JSON/JSONL documents.",
     )
-    parser.add_argument(
-        "file", nargs="?", metavar="FILE",
-        help="JSON file; reads stdin when omitted or '-'",
-    )
-    parser.add_argument(
-        "--key", metavar="PATH", default=None,
-        help="dot path used as comparison key for objects "
-             "(e.g. id, user.name, 0.id)",
-    )
-    parser.add_argument(
-        "--keep-last", action="store_true",
-        help="keep the last occurrence instead of the first",
-    )
-    parser.add_argument(
-        "--jsonl", action="store_true",
-        help="treat input as JSON Lines: one array per line",
-    )
-    parser.add_argument(
-        "--check", action="store_true",
-        help="exit 2 when duplicates are found; writes nothing",
-    )
-    parser.add_argument(
-        "--indent", type=int, default=None, metavar="N",
-        help="pretty-print output with N spaces",
-    )
-    parser.add_argument(
-        "--json", action="store_true",
-        help="emit a JSON stats report instead of the deduped array",
-    )
+    parser.add_argument("file", nargs="?", default="-",
+                        help="JSON/JSONL input file (default: stdin)")
+    parser.add_argument("--check", action="store_true",
+                        help="exit 2 if any duplicate array element exists, no rewrite")
+    parser.add_argument("--json", action="store_true",
+                        help="emit a machine-readable JSON report on stderr")
     args = parser.parse_args(argv)
 
     try:
-        text = read_input(args.file)
+        if args.file == "-":
+            data = sys.stdin.read()
+        else:
+            with open(args.file, "r", encoding="utf-8") as f:
+                data = f.read()
     except OSError as exc:
-        print("json-array-dedupe: %s: %s" % (args.file, exc), file=sys.stderr)
+        print(f"error: cannot read {args.file}: {exc}", file=sys.stderr)
         return 1
 
-    reports = []
-    had_dupes = False
-    rc = 0
+    try:
+        docs = read_docs(data)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
 
-    if args.jsonl:
-        lines = [ln for ln in text.splitlines() if ln.strip()]
-        out_lines = []
-        for lineno, line in enumerate(lines, 1):
-            try:
-                output, total, removed = process_document(
-                    line, args.key, args.keep_last)
-            except (ValueError, json.JSONDecodeError) as exc:
-                print("json-array-dedupe: line %d: %s" % (lineno, exc),
-                      file=sys.stderr)
-                rc = 1
-                continue
-            had_dupes = had_dupes or removed > 0
-            reports.append({"line": lineno, "elements": total,
-                            "removed": removed, "kept": total - removed})
-            out_lines.append(output)
-        if not args.check and not args.json:
-            for output in out_lines:
-                emit(output, args.indent)
-    else:
-        try:
-            output, total, removed = process_document(
-                text, args.key, args.keep_last)
-        except json.JSONDecodeError as exc:
-            print("json-array-dedupe: invalid JSON: %s" % exc, file=sys.stderr)
-            return 1
-        except ValueError as exc:
-            print("json-array-dedupe: %s" % exc, file=sys.stderr)
-            return 1
-        had_dupes = removed > 0
-        reports.append({"file": args.file or "<stdin>", "elements": total,
-                        "removed": removed, "kept": total - removed})
-        if not args.check and not args.json:
-            emit(output, args.indent)
+    stats = {"removed": 0}
+    out_docs = [walk(doc, stats) for doc in docs]
+
+    report = {
+        "documents": len(docs),
+        "duplicates_removed": stats["removed"],
+    }
+
+    if args.check:
+        if args.json:
+            print(json.dumps(report, indent=2), file=sys.stderr)
+        else:
+            print(f"duplicates: {stats['removed']}", file=sys.stderr)
+        return 2 if stats["removed"] else 0
+
+    for doc in out_docs:
+        print(json.dumps(doc, ensure_ascii=False))
 
     if args.json:
-        payload = reports[0] if len(reports) == 1 else reports
-        emit(payload, 2)
-
-    if args.check and had_dupes:
-        return 2
-    return rc
+        print(json.dumps(report, indent=2), file=sys.stderr)
+    return 0
 
 
 if __name__ == "__main__":

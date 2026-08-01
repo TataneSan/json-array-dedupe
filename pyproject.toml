@@ -5,22 +5,14 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "json-array-dedupe"
 version = "1.0.0"
-description = "Remove duplicate elements from JSON arrays (stable order, key-based comparison, JSONL)"
+description = "Remove duplicate elements from arrays inside JSON/JSONL documents (stable)"
 readme = "README.md"
 requires-python = ">=3.9"
 license = {text = "MIT"}
 authors = [{name = "TataneSan"}]
-keywords = ["json", "jsonl", "dedupe", "unique", "cli"]
-classifiers = [
-    "Environment :: Console",
-    "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
-    "Programming Language :: Python :: 3",
-    "Topic :: Text Processing :: Filters",
-]
 
 [project.scripts]
 json-array-dedupe = "json_array_dedupe.cli:main"
 
-[tool.setuptools.packages.find]
-include = ["json_array_dedupe*"]
+[tool.setuptools]
+packages = ["json_array_dedupe"]
