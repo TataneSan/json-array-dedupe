@@ -1,15 +1,16 @@
 [build-system]
-requires = ["setuptools>=61"]
+requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "json-array-dedupe"
 version = "1.0.0"
-description = "Remove duplicate elements from arrays inside JSON/JSONL documents (stable)"
+description = "Deduplicate elements of a JSON array with deep structural equality."
 readme = "README.md"
-requires-python = ">=3.9"
 license = {text = "MIT"}
 authors = [{name = "TataneSan"}]
+requires-python = ">=3.9"
+keywords = ["json", "dedupe", "cli", "arrays"]
 
 [project.scripts]
 json-array-dedupe = "json_array_dedupe.cli:main"
